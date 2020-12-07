@@ -1,4 +1,4 @@
-A client, server, and load balancer solution for a network control when accessing files from multiple servers.
+A client, server, and load balancer solution for a network control when accessing files from multiple
 
 server
 ------
