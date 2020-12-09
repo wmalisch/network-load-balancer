@@ -7,11 +7,12 @@ import sys
 # Constant for our buffer size
  
 BUFFER_SIZE = 1024
+PORT = 5050
 
 # Signal handler for graceful exiting.
 
 def signal_handler(sig, frame):
-    print('Interrupt received, shutting down ...')
+    print('\nInterrupt received, shutting down ...')
     sys.exit(0)
 
 # Create an HTTP response
@@ -95,8 +96,8 @@ def main():
     # a free port at random.  We'll print this out for clients to use.
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('', 0))
-    print('Will wait for client connections at port ' + str(server_socket.getsockname()[1]))
+    server_socket.bind(('', PORT))
+    print('Clients can create connections at port ' + str(server_socket.getsockname()[1]))
     server_socket.listen(1)
     
     # Keep the server running forever.
@@ -143,7 +144,7 @@ def main():
 
             # Check if requested file exists and report a 404 if not.
 
-            if (not os.path.exists(req_file)):
+            if (not os.path.isfile(req_file)):
                 print('Requested file does not exist ... responding with error!')
                 send_response_to_client(conn, '404', '404.html')
 
