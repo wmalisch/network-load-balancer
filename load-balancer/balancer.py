@@ -282,7 +282,6 @@ def handle_client():
         sys.exit(1)
     
     # Now that we have prioritized the servers, we can accept requests
-
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.bind(('', 0))
     print('\n[ACTIVATED] Clients can create connections at port ' + str(client_socket.getsockname()[1]))
@@ -297,29 +296,29 @@ def handle_client():
 
         # We obtain our request from the socket.  We look at the request and
         # figure out what to do based on the contents of things.
-
         request = get_line_from_socket(conn)
         print('[RECEIVED] Request:  \n' + request + '\n')
         request_list = request.split()
 
         # This server doesn't care about headers, so we just clean them up.
-
         while (get_line_from_socket(conn) != ''):
             pass
 
+        # Make sure it is a GET request
         if request_list[0] != 'GET':
                 print('\n[INVALID REQUEST] Responding with error!')
                 send_response_to_client(conn, '501', '501.html', '', '', '')
 
         # If we did not get the proper HTTP version respond with a 505.
-        
         elif request_list[2] != 'HTTP/1.1':
             print('\n[INVALID HTTP] Responding with error!')
             send_response_to_client(conn, '505', '505.html', '', '', '')
         
+        # Respond with a 301 and redirect client to source server
         else:
             print('[SENDING] Request okay. Sending 301 permanently moved.')
 
+            # Properly format requested file
             req_file = request_list[1]
             while (req_file[0] == '/'):
                 req_file = req_file[1:]
@@ -330,7 +329,8 @@ def handle_client():
             host = balancer_list[server].partition(':')[0]
             port = balancer_list[server].partition(':')[2]
             send_response_to_client(conn, '301', '301.html', host, port, req_file)
-            
+        
+        # Close connection
         conn.close()
 
 # Main function

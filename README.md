@@ -5,7 +5,7 @@ loadbalancer
 
 To run the server, simple execute:
   cd load-balancer
-  python loadbalancer.py
+  python balancer.py config.txt
 
 potentially substituting your installation of python3 in for python depending
 on your distribution and configuration.  The server will report the port 
@@ -16,7 +16,7 @@ One of the first lines of declares the global variable TEST_FILE. You will need
 to have a copy of this file in each server folder to execute this program without 
 error.
 
-loadbalancer uses a config.txt to interpret the active servers. Enter the active servers
+balancer.py uses a config.txt to interpret the active servers. Enter the active servers
 in the config.txt, with one host:port per line. There is some minor error handling,
 but try to keep them without random white space. Example config.txt below:
 
