@@ -1,14 +1,16 @@
 import socket
 import os
 from datetime import datetime
+import random
 import time
 import sys
 import argparse
 from signal import signal, SIGINT
 from urllib.parse import urlparse
+import threading
 
 BUFFER_SIZE = 1024
-PORT = 5040
+TIMEOUT = 300
 # Test file that has been placed in all servers
 TEST_FILE = "test.jpg"
 
@@ -67,7 +69,7 @@ def create_balancer_list(server_dict):
 
 # Function create an HTTP response
 def prepare_response_message(value):
-    date = datetime.datetime.now()
+    date = datetime.now()
     date_string = 'Date: ' + date.strftime('%a, %d %b %Y %H:%M:%S EDT')
     message = 'HTTP/1.1 '
     if value == '200':
@@ -78,24 +80,30 @@ def prepare_response_message(value):
         message = message + value + ' Method Not Implemented\r\n' + date_string + '\r\n'
     elif value == '505':
         message = message + value + ' Version Not Supported\r\n' + date_string + '\r\n'
+    elif value == '301':
+        message = message + value + ' Moved Permanently\r\n' + date_string + '\r\n'
     return message
 
-# A function to send the given response and file back to the client.
-def send_response_to_client(sock, code, file_name):
+# A function to send the given response and file back to the client
+def send_response_to_client(sock, code, body_file, host, port, req_file):
 
+    # Response type is html here because the load balancer only sends 301, 505, and 501 responses
     type = 'text/html'
-    # Get size of file
 
-    file_size = os.path.getsize(file_name)
+    # Get size of file
+    file_size = os.path.getsize(body_file)
 
     # Construct header and send it
-
-    header = prepare_response_message(code) + 'Content-Type: ' + type + '\r\nContent-Length: ' + str(file_size) + '\r\n\r\n'
-    sock.send(header.encode())
+    if(code == '301'):
+        header = prepare_response_message(code) + 'Content-Type: ' + type + '\r\nContent-Length: ' + str(file_size) 
+        header+= '\r\nLocation: ' + 'http://' + host + ':' + port + '/' + req_file + '\r\n\r\n'
+        sock.send(header.encode())
+    else:
+        header = prepare_response_message(code) + 'Content-Type: ' + type + '\r\nContent-Length: ' + str(file_size) + '\r\n\r\n'
+        sock.send(header.encode())
 
     # Open the file, read it, and send it
-
-    with open(file_name, 'rb') as file_to_send:
+    with open(body_file, 'rb') as file_to_send:
         while True:
             chunk = file_to_send.read(BUFFER_SIZE)
             if chunk:
@@ -123,17 +131,38 @@ def parse_config_file(file_name):
                 space_count+=1
             else:
                 line_count+=1
+    
+    # If the file contains only new line characters
     if(space_count == len(text)):
         raise ValueError
+
+    # If the file has contents other than new line, make sure they are in host:port format
     else:
         for i in text:
             if (i == '\n'):
                 pass
             else:
+                # Make sure all entries of the server dictionary do not have a trailing \n
                 if(i[-1] == '\n'):
-                    server_dict[i[:-1]] = 0
+                    server = i[:-1]
+                    # Make sure all entries of the server dictionary have no random trailing whitespace
+                    for space in server:
+                        if space.isspace():
+                            raise ValueError
+                        else:
+                            pass
+                    server_dict[server] = 0
                 else:
-                    server_dict[i] = 0
+                    server = i
+                    # Make sure all entries of the server dictionary have no random trailing whitespace
+                    for space in server:
+                        if space.isspace():
+                            raise ValueError
+                        else:
+                            pass
+                    server_dict[server] = 0
+                
+                    
     file.close()
     return server_dict
 
@@ -143,9 +172,13 @@ def test_connection(server_dict):
     for i in server_dict:
         server_details = i.partition(':')
         host = server_details[0]
-        port = int(server_details[2])
+        try:
+            port = int(server_details[2])
+        except ValueError:
+            print("[ERROR] Incorrect config file. Enter one host:port combination per line")
+            sys.exit(1)
         test_request = prepare_get_message(host, port, TEST_FILE)
-        print(f'[CONNECTING] testing server {host}:{port}')
+        print(f'\n[CONNECTING] testing server {host}:{port}')
         start = datetime.now()
         try:
             server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -164,7 +197,7 @@ def test_connection(server_dict):
         # Check if there was an error. Because ever server instance should have the testing file, we will exit if there is an error
         # So that we can place the test file in the server folders before running again
         if response_list[1] != '200':
-            print('Error:  An error response was received from the server.  Details:\n')
+            print('[ERROR]  An error response was received from the server.  Details:\n')
             print(response_line);
             bytes_to_read = 0
             while (not headers_done):
@@ -200,13 +233,12 @@ def test_connection(server_dict):
         time_delay = finish_since_epoch - start_since_epoch
         server_dict[i] = time_delay
 
-        print(f"[COMPLETE] {host}:{port} start: {start} end: {finish}\n")
+        print(f"[COMPLETE] {host}:{port} start: {start} end: {finish}")
 
     return server_dict
 
-def main():
-    signal(SIGINT, signal_handler)
 
+def handle_client():
     # Make sure the user is passing a config file
     try:
         args = len(sys.argv)
@@ -215,9 +247,10 @@ def main():
         else:
             raise ValueError
     except ValueError:
-        print('Error:  You must enter exactly 2 arguments. Usage should be: loadbalancer.py config.txt')
+        print('[ERROR]  You must enter exactly 2 arguments. Usage should be: loadbalancer.py config.txt')
         sys.exit(1)
 
+    # Make sure the config file passed is in the proper format
     try:
         config_file = sys.argv[1]
         config_file_type = config_file.rpartition('.')[2]
@@ -229,15 +262,12 @@ def main():
         else:
             # Parse config file, and store the server details in a dictionary
             server_dict = parse_config_file(config_file)
-
     except ValueError:
-        print('Error:  Invalid config file. Config file must be a txt and must only contain lines of the format host:port. Only one host:port combination per line')
+        print('[ERROR]  Invalid config file. Config file must be a txt and must only contain lines of the format host:port. Only one host:port combination per line. Remove any random trailing whitespace')
         sys.exit(1)
 
-    # Test each server response time. Remove the server if there is erros, otherwise update it's time
+    # Get performance of all servers
     server_dict = test_connection(server_dict)
-    
-    # Sort the servers in order of performance
     server_dict = dict(sorted(server_dict.items(), key=lambda item: item[1]))
 
     # Remove any inactive servers, marked by a -1 in the dictionary
@@ -247,46 +277,78 @@ def main():
 
     # Create a list of server details, where there are as many server instances as the index of the server in the sorted dictionary
     balancer_list = create_balancer_list(server_dict)
-    mod_balancer = len(balancer_list)
+    if len(balancer_list) < 1:
+        print("[ERROR] No servers are active. Please check that servers are corrctly entered in config file. Exiting program.")
+        sys.exit(1)
+    
     # Now that we have prioritized the servers, we can accept requests
 
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.bind(('', PORT))
-    print('Clients can create connections at port ' + str(client_socket.getsockname()[1]))
+    client_socket.bind(('', 0))
+    print('\n[ACTIVATED] Clients can create connections at port ' + str(client_socket.getsockname()[1]))
     client_socket.listen(1)
-
+    client_socket.settimeout(TIMEOUT)
     while(1):
         print("[WAITING] Ready to receive connection from client")
         conn, addr = client_socket.accept()
-        print('Accepted connection from client address:', addr)
-        print('Connection to client established, waiting to receive message...')
+        client_socket.settimeout(TIMEOUT)
+        print('\n[ACCEPTED CONN] connection from client address:', addr)
+        print('[SECURED] Connection to client established, waiting to receive message...')
 
-    # We obtain our request from the socket.  We look at the request and
-    # figure out what to do based on the contents of things.
+        # We obtain our request from the socket.  We look at the request and
+        # figure out what to do based on the contents of things.
 
-    request = get_line_from_socket(conn)
-    print('Received request:  ' + request)
-    request_list = request.split()
+        request = get_line_from_socket(conn)
+        print('[RECEIVED] Request:  \n' + request + '\n')
+        request_list = request.split()
 
-    # This server doesn't care about headers, so we just clean them up.
+        # This server doesn't care about headers, so we just clean them up.
 
-    while (get_line_from_socket(conn) != ''):
-        pass
+        while (get_line_from_socket(conn) != ''):
+            pass
 
-    if request_list[0] != 'GET':
-            print('Invalid type of request received ... responding with error!')
-            send_response_to_client(conn, '501', '501.html')
+        if request_list[0] != 'GET':
+                print('\n[INVALID REQUEST] Responding with error!')
+                send_response_to_client(conn, '501', '501.html', '', '', '')
 
-    # If we did not get the proper HTTP version respond with a 505.
+        # If we did not get the proper HTTP version respond with a 505.
+        
+        elif request_list[2] != 'HTTP/1.1':
+            print('\n[INVALID HTTP] Responding with error!')
+            send_response_to_client(conn, '505', '505.html', '', '', '')
+        
+        else:
+            print('[SENDING] Request okay. Sending 301 permanently moved.')
 
-    elif request_list[2] != 'HTTP/1.1':
-        print('Invalid HTTP version received ... responding with error!')
-        send_response_to_client(conn, '505', '505.html')
+            req_file = request_list[1]
+            while (req_file[0] == '/'):
+                req_file = req_file[1:]
+            
+            # Get host and port details for a randomly selected server
+            balancer_len = len(balancer_list)
+            server = random.randint(0, balancer_len-1)
+            host = balancer_list[server].partition(':')[0]
+            port = balancer_list[server].partition(':')[2]
+            send_response_to_client(conn, '301', '301.html', host, port, req_file)
+            
+        conn.close()
+
+# Main function
+def main():
+
+    # Register signal alarm for program
+    signal(SIGINT, signal_handler)
     
-    
-    
-    
-    print('done')
+    # Run the load balancer, and reboot upon inactive use
+    # Reboot set to 5 minutes / 300 seconds
+    while(1):
+        try:
+            handle_client()
+        except socket.timeout:
+            print("[TIMEOUT ERROR] Server was idle too long. Re-booting now.")
+
+
+
 
 if __name__ == '__main__':
     main()
